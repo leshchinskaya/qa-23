@@ -105,7 +105,7 @@
       name: "Репин Александр",
       superpower: "Deadline Freeze",
       description: "Замедляет хаос перед релизом и выравнивает все метрики.",
-      image: "assets/repin.jpg",
+      image: "assets/repin.png",
       power: {
         name: "Стоп-кадр дедлайна",
         effects: { stability: 6, speed: 6, morale: 6 },

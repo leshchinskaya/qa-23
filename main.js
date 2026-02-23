@@ -128,7 +128,7 @@ const HEROES = [
     name: "Репин Александр",
     description: "Мегаэффективно удерживает SLA и вывозит критичные сроки в самые горячие релизы.",
     superpower: "Щит SLA",
-    image: "assets/repin.jpg",
+    image: "assets/repin.png",
     powerEffects: { stability: 6, speed: 6, morale: 6 }
   }
 ];
@@ -601,7 +601,7 @@ function getInitialTheme() {
   if (saved === "light" || saved === "dark") {
     return saved;
   }
-  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  return "dark";
 }
 
 function applyTheme(theme, persist = false) {
