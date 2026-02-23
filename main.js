@@ -4,6 +4,59 @@ import * as qaTowerDefense from "./games/qa-tower-defense.js";
 
 const STORAGE_KEY = "qaGamePortalProfileV2";
 const THEME_STORAGE_KEY = "qaGamePortalTheme";
+const AUDIO_STORAGE_KEY = "qaGamePortalAudioMuted";
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function deriveHeroAbilities(hero) {
+  const stability = hero.powerEffects.stability || 0;
+  const speed = hero.powerEffects.speed || 0;
+  const morale = hero.powerEffects.morale || 0;
+
+  const qaHeroCooldown = clamp(12 - speed * 0.08 + Math.max(0, morale) * 0.04, 8, 14);
+  const qaHeroBoost = {
+    stability: Math.round(clamp(stability, -5, 22)),
+    speed: Math.round(clamp(speed, -5, 22)),
+    morale: Math.round(clamp(morale, -8, 22))
+  };
+
+  const fighterAbility = {
+    name: hero.superpower,
+    cooldown: Number(clamp(14 - speed * 0.12 + Math.max(0, morale) * 0.02, 8.5, 15.5).toFixed(1)),
+    duration: Number(clamp(3.4 + (stability + speed + Math.max(0, morale)) * 0.018, 3.1, 5.2).toFixed(1)),
+    moveMultiplier: Number(clamp(1 + speed * 0.013 + Math.max(0, morale) * 0.002, 1.03, 1.32).toFixed(2)),
+    jumpMultiplier: Number(clamp(1 + speed * 0.008, 1.02, 1.18).toFixed(2)),
+    bulletDamageBonus: Math.round(clamp(2 + speed * 0.3 + Math.max(0, stability) * 0.2, 2, 9)),
+    auraDps: Number(clamp(14 + stability * 0.8 + Math.max(0, morale) * 0.45, 10, 34).toFixed(1)),
+    auraRange: Math.round(clamp(130 + speed * 2 + Math.max(0, morale) * 1.4, 120, 190)),
+    damageReduction: Number(clamp(0.08 + Math.max(0, stability) * 0.011 + Math.max(0, morale) * 0.004, 0.08, 0.36).toFixed(2)),
+    instantHeal: Math.round(clamp(3 + Math.max(0, morale) * 0.55, 2, 14))
+  };
+
+  const towerAbility = {
+    name: hero.superpower,
+    cooldown: Number(clamp(20 - speed * 0.18 + Math.max(0, morale) * 0.06, 12.5, 22).toFixed(1)),
+    duration: Number(clamp(4.8 + (Math.max(0, stability) + Math.max(0, morale)) * 0.045, 4.5, 8.5).toFixed(1)),
+    fireRateMultiplier: Number(clamp(1.12 + speed * 0.014 + Math.max(0, morale) * 0.003, 1.1, 1.42).toFixed(2)),
+    damageMultiplier: Number(clamp(1.08 + Math.max(0, stability) * 0.015 + speed * 0.006, 1.06, 1.45).toFixed(2)),
+    rangeBonus: Math.round(clamp(8 + Math.max(0, morale) * 2.2 + speed * 0.6, 8, 40)),
+    instantCredits: Math.round(clamp(8 + Math.max(0, morale) * 1.1, 6, 26)),
+    baseHeal: Math.round(clamp(2 + Math.max(0, stability) * 0.45, 2, 12)),
+    bountyMultiplier: Number(clamp(1 + Math.max(0, morale) * 0.015, 1, 1.3).toFixed(2))
+  };
+
+  return {
+    qaHero: {
+      name: hero.superpower,
+      cooldown: Number(qaHeroCooldown.toFixed(1)),
+      effects: qaHeroBoost
+    },
+    fighter: fighterAbility,
+    tower: towerAbility
+  };
+}
 
 const HEROES = [
   {
@@ -80,6 +133,10 @@ const HEROES = [
   }
 ];
 
+HEROES.forEach((hero) => {
+  hero.abilities = deriveHeroAbilities(hero);
+});
+
 const TOWER_DIFFICULTIES = {
   easy: { id: "easy", title: "Лёгкая", caption: "Больше запаса HP и кредитов, 6 волн." },
   normal: { id: "normal", title: "Нормальная", caption: "Базовый режим: 8 волн и стандартный баланс." },
@@ -107,7 +164,7 @@ const GAMES = {
     shortDescription: "Оборона " +
       "прода" +
       ": выбери сложность, размещай башни и переживи волны атакующих дефектов.",
-    controls: "Клик — поставить башню, 1/2/3 — выбор типа, P — пауза",
+    controls: "Клик — поставить башню, 1/2/3 — выбор типа, Shift — суперсила, P — пауза",
     module: qaTowerDefense
   }
 };
@@ -225,9 +282,272 @@ class StateManager {
   }
 }
 
+class AudioManager {
+  constructor(storageKey) {
+    this.storageKey = storageKey;
+    this.context = null;
+    this.master = null;
+    this.musicBus = null;
+    this.sfxBus = null;
+    this.musicTimer = null;
+    this.musicMode = null;
+    this.muted = this.loadMuted();
+    this.unlocked = false;
+  }
+
+  loadMuted() {
+    return localStorage.getItem(this.storageKey) === "1";
+  }
+
+  saveMuted() {
+    localStorage.setItem(this.storageKey, this.muted ? "1" : "0");
+  }
+
+  ensureContext() {
+    if (this.context) {
+      return;
+    }
+
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) {
+      return;
+    }
+
+    this.context = new Ctx();
+
+    this.master = this.context.createGain();
+    this.musicBus = this.context.createGain();
+    this.sfxBus = this.context.createGain();
+
+    this.master.gain.value = this.muted ? 0 : 0.16;
+    this.musicBus.gain.value = 0.48;
+    this.sfxBus.gain.value = 0.8;
+
+    this.musicBus.connect(this.master);
+    this.sfxBus.connect(this.master);
+    this.master.connect(this.context.destination);
+  }
+
+  unlock() {
+    this.ensureContext();
+    if (!this.context) {
+      return;
+    }
+    if (this.context.state === "running") {
+      this.unlocked = true;
+      return;
+    }
+    if (this.context.state === "suspended") {
+      this.context.resume()
+        .then(() => {
+          this.unlocked = this.context?.state === "running";
+          if (this.unlocked && this.musicMode && !this.musicTimer && !this.muted) {
+            this.startMusic(this.musicMode, true);
+          }
+        })
+        .catch(() => {});
+    }
+  }
+
+  isMuted() {
+    return this.muted;
+  }
+
+  setMuted(nextMuted, persist = true) {
+    this.muted = Boolean(nextMuted);
+    this.ensureContext();
+    if (this.master) {
+      this.master.gain.value = this.muted ? 0 : 0.16;
+    }
+    if (persist) {
+      this.saveMuted();
+    }
+
+    if (this.muted) {
+      this.stopMusic();
+    } else if (this.musicMode) {
+      this.startMusic(this.musicMode);
+    }
+  }
+
+  toggleMuted() {
+    this.setMuted(!this.muted, true);
+    return this.muted;
+  }
+
+  tone({
+    frequency,
+    duration = 0.12,
+    type = "triangle",
+    gain = 0.22,
+    delay = 0,
+    target = "sfx"
+  }, allowResumeRetry = true) {
+    this.ensureContext();
+    if (this.muted || !this.context || !frequency) {
+      return;
+    }
+
+    if (this.context.state !== "running") {
+      if (allowResumeRetry) {
+        this.context.resume()
+          .then(() => {
+            this.unlocked = this.context?.state === "running";
+            this.tone({ frequency, duration, type, gain, delay: delay + 0.01, target }, false);
+          })
+          .catch(() => {});
+      }
+      return;
+    }
+
+    const bus = target === "music" ? this.musicBus : this.sfxBus;
+    if (!bus) {
+      return;
+    }
+
+    const osc = this.context.createOscillator();
+    const env = this.context.createGain();
+    const startAt = this.context.currentTime + delay;
+    const stopAt = startAt + duration;
+
+    osc.type = type;
+    osc.frequency.setValueAtTime(frequency, startAt);
+    env.gain.setValueAtTime(0.0001, startAt);
+    env.gain.exponentialRampToValueAtTime(gain, startAt + Math.min(0.02, duration * 0.25));
+    env.gain.exponentialRampToValueAtTime(0.0001, stopAt);
+
+    osc.connect(env);
+    env.connect(bus);
+
+    osc.start(startAt);
+    osc.stop(stopAt + 0.02);
+  }
+
+  sequence(notes, options = {}) {
+    notes.forEach((note, index) => {
+      this.tone({
+        frequency: note.frequency,
+        duration: note.duration,
+        type: options.type || note.type || "triangle",
+        gain: (options.gain || 0.2) * (note.gain || 1),
+        delay: (options.step || 0.08) * index + (note.delay || 0),
+        target: options.target || "sfx"
+      });
+    });
+  }
+
+  play(name) {
+    if (this.muted) {
+      return;
+    }
+    this.unlock();
+
+    switch (name) {
+      case "ui-click":
+        this.sequence([{ frequency: 420, duration: 0.06 }, { frequency: 620, duration: 0.09 }], { gain: 0.14 });
+        break;
+      case "ui-nav":
+        this.sequence([{ frequency: 350, duration: 0.07 }, { frequency: 460, duration: 0.1 }, { frequency: 620, duration: 0.08 }], { gain: 0.12, step: 0.06 });
+        break;
+      case "modal-open":
+        this.sequence([{ frequency: 250, duration: 0.08 }, { frequency: 200, duration: 0.14 }], { gain: 0.12, type: "sine" });
+        break;
+      case "modal-ok":
+        this.sequence([{ frequency: 520, duration: 0.08 }, { frequency: 740, duration: 0.12 }], { gain: 0.14 });
+        break;
+      case "modal-cancel":
+        this.sequence([{ frequency: 440, duration: 0.08 }, { frequency: 320, duration: 0.1 }], { gain: 0.12 });
+        break;
+      case "game-start":
+        this.sequence([{ frequency: 370, duration: 0.08 }, { frequency: 494, duration: 0.08 }, { frequency: 659, duration: 0.15 }], { gain: 0.16, step: 0.07 });
+        break;
+      case "game-win":
+        this.sequence([{ frequency: 392, duration: 0.09 }, { frequency: 523, duration: 0.09 }, { frequency: 659, duration: 0.09 }, { frequency: 784, duration: 0.14 }], { gain: 0.2, step: 0.06 });
+        break;
+      case "game-lose":
+        this.sequence([{ frequency: 350, duration: 0.09 }, { frequency: 294, duration: 0.1 }, { frequency: 220, duration: 0.16 }], { gain: 0.14, step: 0.08, type: "sawtooth" });
+        break;
+      case "game-pause":
+        this.sequence([{ frequency: 470, duration: 0.06 }, { frequency: 470, duration: 0.06, delay: 0.02 }], { gain: 0.12 });
+        break;
+      case "game-restart":
+        this.sequence([{ frequency: 340, duration: 0.05 }, { frequency: 470, duration: 0.06 }, { frequency: 620, duration: 0.08 }], { gain: 0.14, step: 0.05 });
+        break;
+      case "coin":
+        this.sequence([{ frequency: 760, duration: 0.06 }, { frequency: 1080, duration: 0.09 }], { gain: 0.15, step: 0.05, type: "square" });
+        break;
+      case "ability":
+        this.sequence([{ frequency: 520, duration: 0.08 }, { frequency: 780, duration: 0.12 }, { frequency: 980, duration: 0.12 }], { gain: 0.17, step: 0.05 });
+        break;
+      case "fighter-shot":
+        this.tone({ frequency: 900, duration: 0.04, gain: 0.09, type: "square" });
+        break;
+      case "fighter-hit":
+        this.tone({ frequency: 210, duration: 0.06, gain: 0.1, type: "sawtooth" });
+        break;
+      case "tower-place":
+        this.sequence([{ frequency: 420, duration: 0.05 }, { frequency: 520, duration: 0.07 }], { gain: 0.1, step: 0.04 });
+        break;
+      case "tower-fire":
+        this.tone({ frequency: 650, duration: 0.03, gain: 0.07, type: "square" });
+        break;
+      case "tower-hit":
+        this.tone({ frequency: 260, duration: 0.05, gain: 0.08, type: "triangle" });
+        break;
+      case "tower-wave":
+        this.sequence([{ frequency: 320, duration: 0.05 }, { frequency: 440, duration: 0.08 }, { frequency: 560, duration: 0.1 }], { gain: 0.11, step: 0.06 });
+        break;
+      default:
+        this.tone({ frequency: 560, duration: 0.05, gain: 0.08 });
+    }
+  }
+
+  scheduleMusicBeat(mode, step) {
+    const lobbyPattern = [196, 246.94, 293.66, 246.94];
+    const gamePattern = [220, 329.63, 261.63, 392];
+    const notes = mode === "game" ? gamePattern : lobbyPattern;
+    const root = notes[step % notes.length];
+    this.tone({ frequency: root, duration: mode === "game" ? 0.25 : 0.35, gain: 0.045, type: "sine", target: "music" });
+    this.tone({ frequency: root * 1.5, duration: 0.16, gain: 0.022, delay: 0.02, type: "triangle", target: "music" });
+  }
+
+  stopMusic() {
+    if (this.musicTimer) {
+      clearInterval(this.musicTimer);
+      this.musicTimer = null;
+    }
+  }
+
+  startMusic(mode = "lobby", skipUnlock = false) {
+    if (this.musicMode === mode && this.musicTimer) {
+      return;
+    }
+    this.musicMode = mode;
+    this.stopMusic();
+    if (this.muted) {
+      return;
+    }
+
+    if (!skipUnlock) {
+      this.unlock();
+    }
+    if (!this.context || this.context.state !== "running") {
+      return;
+    }
+    let step = 0;
+    const tickMs = mode === "game" ? 680 : 980;
+    this.scheduleMusicBeat(mode, step);
+    this.musicTimer = setInterval(() => {
+      step += 1;
+      this.scheduleMusicBeat(mode, step);
+    }, tickMs);
+  }
+}
+
 const appState = {
   profile: null,
   theme: "dark",
+  audioMuted: false,
   pendingTowerDifficulty: "normal",
   currentView: "loading",
   pendingGameId: null,
@@ -256,6 +576,7 @@ const dom = {
   recentRuns: document.getElementById("recent-runs"),
   topbarCoins: document.getElementById("topbar-coins"),
   topbarScore: document.getElementById("topbar-score"),
+  audioToggle: document.getElementById("audio-toggle"),
   themeToggle: document.getElementById("theme-toggle"),
   gameIntro: document.getElementById("game-intro"),
   gameToolbar: document.getElementById("game-toolbar"),
@@ -273,6 +594,7 @@ const dom = {
 };
 
 const stateManager = new StateManager(STORAGE_KEY);
+const audioManager = new AudioManager(AUDIO_STORAGE_KEY);
 
 function getInitialTheme() {
   const saved = localStorage.getItem(THEME_STORAGE_KEY);
@@ -327,6 +649,46 @@ function getHero(heroId) {
   return HEROES.find((hero) => hero.id === heroId) || null;
 }
 
+function formatPercent(multiplier) {
+  return `${Math.round((multiplier - 1) * 100)}%`;
+}
+
+function formatSigned(value) {
+  return `${value >= 0 ? "+" : ""}${value}`;
+}
+
+function getHeroPortalAbilityBlurb(hero) {
+  const fighter = hero?.abilities?.fighter;
+  const tower = hero?.abilities?.tower;
+  if (!fighter || !tower) {
+    return "Суперсила влияет на все режимы.";
+  }
+  return `Shift: Fighter ${formatPercent(fighter.moveMultiplier)} скорости, Tower +${tower.instantCredits} кредитов`;
+}
+
+function getHeroGameAbilitySummary(hero, gameId) {
+  if (!hero?.abilities) {
+    return "Суперсила усиливает матч.";
+  }
+
+  if (gameId === "qa-hero") {
+    const qaHero = hero.abilities.qaHero;
+    return `${qaHero.name}: ${formatSigned(qaHero.effects.stability)} Stability, ${formatSigned(qaHero.effects.speed)} Speed, ${formatSigned(qaHero.effects.morale)} Morale (КД ${qaHero.cooldown}с).`;
+  }
+
+  if (gameId === "pixel-qa-fighter") {
+    const fighter = hero.abilities.fighter;
+    return `${fighter.name}: Shift даёт ${fighter.duration}с усиления, ${formatPercent(fighter.moveMultiplier)} к скорости, +${fighter.bulletDamageBonus} к урону пули и ${Math.round(fighter.damageReduction * 100)}% защиты (КД ${fighter.cooldown}с).`;
+  }
+
+  if (gameId === "qa-tower-defense") {
+    const tower = hero.abilities.tower;
+    return `${tower.name}: Shift баффает башни на ${tower.duration}с (${formatPercent(tower.fireRateMultiplier)} к темпу, ${formatPercent(tower.damageMultiplier)} к урону), сразу даёт +${tower.instantCredits} кредитов и +${tower.baseHeal} HP базе (КД ${tower.cooldown}с).`;
+  }
+
+  return "Суперсила усиливает матч.";
+}
+
 function setView(viewName) {
   appState.currentView = viewName;
   Object.entries(dom.views).forEach(([name, element]) => {
@@ -335,12 +697,25 @@ function setView(viewName) {
   dom.navButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.route === viewName);
   });
+
+  if (viewName === "loading") {
+    audioManager.stopMusic();
+    return;
+  }
+
+  if (viewName === "game" && appState.activeGameId) {
+    audioManager.startMusic("game");
+    return;
+  }
+
+  audioManager.startMusic("lobby");
 }
 
 function showConfirm(text) {
   dom.modalText.textContent = text;
   dom.modal.classList.add("open");
   dom.modal.setAttribute("aria-hidden", "false");
+  audioManager.play("modal-open");
 
   return new Promise((resolve) => {
     appState.modalResolver = resolve;
@@ -350,6 +725,7 @@ function showConfirm(text) {
 function closeConfirm(result) {
   dom.modal.classList.remove("open");
   dom.modal.setAttribute("aria-hidden", "true");
+  audioManager.play(result ? "modal-ok" : "modal-cancel");
   if (appState.modalResolver) {
     appState.modalResolver(result);
     appState.modalResolver = null;
@@ -403,6 +779,15 @@ function updateProfileWithResult(result) {
 function renderTopbar() {
   dom.topbarCoins.textContent = String(appState.profile.coins);
   dom.topbarScore.textContent = String(appState.profile.totalScore);
+
+  if (!dom.audioToggle) {
+    return;
+  }
+
+  const isMuted = appState.audioMuted;
+  dom.audioToggle.textContent = isMuted ? "🔇" : "🔊";
+  dom.audioToggle.setAttribute("title", isMuted ? "Звук выключен" : "Звук включен");
+  dom.audioToggle.setAttribute("aria-label", isMuted ? "Включить звук" : "Выключить звук");
 }
 
 function renderSelectedHeroPreview() {
@@ -419,7 +804,10 @@ function renderSelectedHeroPreview() {
     `;
 
     const routeButton = dom.selectedHeroPreview.querySelector("[data-route-link='heroes']");
-    routeButton.addEventListener("click", () => setView("heroes"));
+    routeButton.addEventListener("click", () => {
+      audioManager.play("ui-click");
+      setView("heroes");
+    });
     return;
   }
 
@@ -429,13 +817,17 @@ function renderSelectedHeroPreview() {
       <div class="selected-hero-meta">
         <p><strong>${hero.name}</strong></p>
         <span>Суперсила: ${hero.superpower}</span>
+        <p class="hero-ability">${getHeroPortalAbilityBlurb(hero)}</p>
       </div>
       <button type="button" class="btn" data-route-link="heroes">Сменить героя</button>
     </div>
   `;
 
   const routeButton = dom.selectedHeroPreview.querySelector("[data-route-link='heroes']");
-  routeButton.addEventListener("click", () => setView("heroes"));
+  routeButton.addEventListener("click", () => {
+    audioManager.play("ui-click");
+    setView("heroes");
+  });
 }
 
 function renderStatsPanel() {
@@ -480,11 +872,13 @@ function renderHeroGrid() {
       <h3>${hero.name}</h3>
       <p>${hero.description}</p>
       <p class="hero-power">Суперсила: ${hero.superpower}</p>
+      <p>${getHeroPortalAbilityBlurb(hero)}</p>
     </article>
   `).join("");
 
   dom.heroGrid.querySelectorAll(".hero-card").forEach((card) => {
     card.addEventListener("click", () => {
+      audioManager.play("ui-click");
       const wasUnselected = !getHero(appState.profile.selectedHeroId);
       appState.profile.selectedHeroId = card.dataset.heroId;
       appState.profile.heroSelectionConfirmed = true;
@@ -514,6 +908,7 @@ function renderGameCards() {
 
   dom.gameCards.querySelectorAll("[data-play]").forEach((button) => {
     button.addEventListener("click", () => {
+      audioManager.play("ui-click");
       if (!getHero(appState.profile.selectedHeroId)) {
         setView("heroes");
         return;
@@ -543,6 +938,7 @@ function openGameIntro(gameId) {
 
   appState.pendingGameId = gameId;
   const game = GAMES[gameId];
+  const hero = getHero(appState.profile.selectedHeroId);
   const isTowerDefense = gameId === "qa-tower-defense";
   let selectedDifficultyId = appState.pendingTowerDifficulty in TOWER_DIFFICULTIES
     ? appState.pendingTowerDifficulty
@@ -566,6 +962,9 @@ function openGameIntro(gameId) {
       </div>
     `
     : "";
+  const abilityMarkup = hero
+    ? `<p class="hero-ability-note"><strong>Суперсила героя:</strong> ${getHeroGameAbilitySummary(hero, gameId)}</p>`
+    : "";
 
   dom.gameContainer.innerHTML = "";
   dom.gameToolbar.classList.remove("active");
@@ -574,6 +973,7 @@ function openGameIntro(gameId) {
     <p>${game.shortDescription}</p>
     <p><strong>Управление:</strong> ${game.controls}</p>
     ${difficultyMarkup}
+    ${abilityMarkup}
     <div class="intro-actions">
       <button id="btn-game-start" class="btn" type="button">Старт</button>
       <button id="btn-game-back" class="btn btn-secondary" type="button">Назад в лобби</button>
@@ -588,6 +988,7 @@ function openGameIntro(gameId) {
     const difficultyCaption = dom.gameIntro.querySelector("#td-intro-caption");
     dom.gameIntro.querySelectorAll("[data-difficulty]").forEach((button) => {
       button.addEventListener("click", () => {
+        audioManager.play("ui-click");
         selectedDifficultyId = button.dataset.difficulty in TOWER_DIFFICULTIES
           ? button.dataset.difficulty
           : "normal";
@@ -602,9 +1003,11 @@ function openGameIntro(gameId) {
   }
 
   dom.gameIntro.querySelector("#btn-game-start").addEventListener("click", () => {
+    audioManager.play("ui-click");
     startGame(gameId, { towerDifficulty: selectedDifficultyId });
   });
   dom.gameIntro.querySelector("#btn-game-back").addEventListener("click", () => {
+    audioManager.play("ui-click");
     appState.pendingGameId = null;
     setView("lobby");
   });
@@ -646,9 +1049,18 @@ function showResults(result) {
     </div>
   `;
 
-  dom.resultsCard.querySelector("#results-lobby").addEventListener("click", () => setView("lobby"));
-  dom.resultsCard.querySelector("#results-replay").addEventListener("click", () => openGameIntro(result.gameId));
-  dom.resultsCard.querySelector("#results-ach").addEventListener("click", () => setView("achievements"));
+  dom.resultsCard.querySelector("#results-lobby").addEventListener("click", () => {
+    audioManager.play("ui-click");
+    setView("lobby");
+  });
+  dom.resultsCard.querySelector("#results-replay").addEventListener("click", () => {
+    audioManager.play("ui-click");
+    openGameIntro(result.gameId);
+  });
+  dom.resultsCard.querySelector("#results-ach").addEventListener("click", () => {
+    audioManager.play("ui-click");
+    setView("achievements");
+  });
 
   setView("results");
 }
@@ -674,6 +1086,10 @@ function handleGameResult(baseResult) {
   appState.pendingGameId = null;
 
   updateProfileWithResult(result);
+  audioManager.play(result.win ? "game-win" : "game-lose");
+  if (result.coins > 0) {
+    audioManager.play("coin");
+  }
   renderAll();
   showResults(result);
 }
@@ -698,6 +1114,8 @@ function startGame(gameId, options = {}) {
   dom.gameIntro.innerHTML = "";
   dom.gameToolbar.classList.add("active");
   dom.gameContainer.innerHTML = "";
+  audioManager.play("game-start");
+  audioManager.startMusic("game");
 
   let ended = false;
 
@@ -730,7 +1148,10 @@ function startGame(gameId, options = {}) {
       hero,
       selectedHeroId: appState.profile.selectedHeroId,
       profile: appState.profile,
-      towerDifficulty: appState.pendingTowerDifficulty
+      towerDifficulty: appState.pendingTowerDifficulty,
+      audio: {
+        play: (name) => audioManager.play(name)
+      }
     },
     callbacks
   );
@@ -756,7 +1177,30 @@ async function exitGameToLobby() {
 }
 
 function attachEvents() {
+  const unlockAudioOnce = () => {
+    audioManager.unlock();
+    window.removeEventListener("pointerdown", unlockAudioOnce);
+    window.removeEventListener("click", unlockAudioOnce);
+    window.removeEventListener("mousedown", unlockAudioOnce);
+    window.removeEventListener("touchstart", unlockAudioOnce);
+    window.removeEventListener("keydown", unlockAudioOnce);
+  };
+  window.addEventListener("pointerdown", unlockAudioOnce);
+  window.addEventListener("click", unlockAudioOnce);
+  window.addEventListener("mousedown", unlockAudioOnce);
+  window.addEventListener("touchstart", unlockAudioOnce);
+  window.addEventListener("keydown", unlockAudioOnce);
+
+  dom.audioToggle?.addEventListener("click", () => {
+    appState.audioMuted = audioManager.toggleMuted();
+    renderTopbar();
+    if (!appState.audioMuted) {
+      audioManager.play("ui-click");
+    }
+  });
+
   dom.themeToggle?.addEventListener("click", () => {
+    audioManager.play("ui-click");
     toggleTheme();
   });
 
@@ -765,6 +1209,7 @@ function attachEvents() {
       if (!appState.loadingDone) {
         return;
       }
+      audioManager.play("ui-nav");
       const route = button.dataset.route;
       if (appState.activeGameId && route !== "game") {
         const ok = await showConfirm("Открытие другого раздела завершит текущий матч. Продолжить?");
@@ -780,16 +1225,19 @@ function attachEvents() {
   dom.btnPause.addEventListener("click", () => {
     if (appState.activeController && appState.activeController.togglePause) {
       appState.activeController.togglePause();
+      audioManager.play("game-pause");
     }
   });
 
   dom.btnRestart.addEventListener("click", () => {
     if (appState.activeController && appState.activeController.restart) {
       appState.activeController.restart();
+      audioManager.play("game-restart");
     }
   });
 
   dom.btnExit.addEventListener("click", () => {
+    audioManager.play("ui-click");
     exitGameToLobby();
   });
 
@@ -813,12 +1261,14 @@ function attachEvents() {
     if (event.key === "p" || event.key === "P") {
       event.preventDefault();
       appState.activeController?.togglePause?.();
+      audioManager.play("game-pause");
       return;
     }
 
     if (event.key === "r" || event.key === "R") {
       event.preventDefault();
       appState.activeController?.restart?.();
+      audioManager.play("game-restart");
       return;
     }
 
@@ -831,6 +1281,8 @@ function attachEvents() {
 
 async function bootstrap() {
   applyTheme(getInitialTheme());
+  appState.audioMuted = audioManager.isMuted();
+  audioManager.setMuted(appState.audioMuted, false);
   attachEvents();
   appState.profile = stateManager.load();
 

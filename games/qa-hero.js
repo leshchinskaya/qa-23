@@ -229,7 +229,16 @@ class QaHeroRuntime {
   constructor(container, globalState, callbacks) {
     this.container = container;
     this.hero = globalState.hero;
+    this.audio = globalState.audio || null;
     this.callbacks = callbacks;
+    this.ability = this.hero?.abilities?.qaHero || {
+      cooldown: 12,
+      effects: {
+        stability: this.hero.powerEffects.stability || 0,
+        speed: this.hero.powerEffects.speed || 0,
+        morale: this.hero.powerEffects.morale || 0
+      }
+    };
 
     this.state = {
       stats: { stability: 70, speed: 70, morale: 70 },
@@ -265,7 +274,7 @@ class QaHeroRuntime {
           </div>
           <div class="hud-metrics">
             <span class="metric">До релиза: <strong id="qa-hero-time">${GAME_DURATION_SECONDS}</strong>с</span>
-            <span class="metric">КД суперсилы: <strong id="qa-hero-cd">0</strong>с</span>
+            <span class="metric">КД суперсилы: <strong id="qa-hero-cd">0.0</strong>с</span>
           </div>
         </header>
 
@@ -333,7 +342,7 @@ class QaHeroRuntime {
 
       this.state.timeLeft -= 1;
       if (this.state.powerCooldown > 0) {
-        this.state.powerCooldown -= 1;
+        this.state.powerCooldown = clamp(this.state.powerCooldown - 1, 0, 99);
       }
 
       this.updateHud();
@@ -365,13 +374,16 @@ class QaHeroRuntime {
         description: event.description,
         choices: event.choices.map((choice) => ({ ...choice }))
       };
+      this.audio?.play?.("ui-nav");
       this.renderEvent();
     }, EVENT_INTERVAL_MS);
   }
 
   updateHud() {
     this.dom.time.textContent = String(this.state.timeLeft);
-    this.dom.cooldown.textContent = String(this.state.powerCooldown);
+    this.dom.cooldown.textContent = this.state.powerCooldown > 0
+      ? this.state.powerCooldown.toFixed(1)
+      : "0.0";
 
     Object.entries(this.state.stats).forEach(([key, value]) => {
       const ref = this.dom.stats[key];
@@ -414,6 +426,7 @@ class QaHeroRuntime {
     }
 
     this.state.eventsHandled += 1;
+    this.audio?.play?.("ui-click");
     this.applyEffects(choice.effects, `${this.state.activeEvent.title}: ${choice.outcome}`);
     if (!this.state.running) {
       return;
@@ -432,18 +445,19 @@ class QaHeroRuntime {
 
   activatePower() {
     if (this.state.powerCooldown > 0) {
-      this.pushLog(`Суперсила ещё недоступна: ${this.state.powerCooldown}с.`);
+      this.pushLog(`Суперсила ещё недоступна: ${this.state.powerCooldown.toFixed(1)}с.`);
       return;
     }
 
-    this.state.powerCooldown = 12;
+    this.state.powerCooldown = this.ability.cooldown;
     this.state.powerActivations += 1;
+    this.audio?.play?.("ability");
 
     this.applyEffects(
       {
-        stability: this.hero.powerEffects.stability || 0,
-        speed: this.hero.powerEffects.speed || 0,
-        morale: this.hero.powerEffects.morale || 0
+        stability: this.ability.effects.stability || 0,
+        speed: this.ability.effects.speed || 0,
+        morale: this.ability.effects.morale || 0
       },
       `${this.hero.name} активирует «${this.hero.superpower}».`
     );
@@ -467,6 +481,7 @@ class QaHeroRuntime {
 
     const failed = Object.entries(this.state.stats).find(([, value]) => value <= 0);
     if (failed) {
+      this.audio?.play?.("fighter-hit");
       this.finish(false, `${failed[0]} упал до нуля. Релиз сорван.`);
     }
   }

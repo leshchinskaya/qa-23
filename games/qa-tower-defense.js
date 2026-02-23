@@ -88,6 +88,18 @@ class QaTowerDefense {
   constructor(container, globalState, callbacks) {
     this.container = container;
     this.hero = globalState.hero;
+    this.audio = globalState.audio || null;
+    this.ability = this.hero?.abilities?.tower || {
+      name: this.hero.superpower,
+      cooldown: 18,
+      duration: 6,
+      fireRateMultiplier: 1.22,
+      damageMultiplier: 1.22,
+      rangeBonus: 18,
+      instantCredits: 12,
+      baseHeal: 5,
+      bountyMultiplier: 1.08
+    };
     this.difficulty = getDifficultyPreset(globalState.towerDifficulty);
     this.callbacks = callbacks;
 
@@ -131,6 +143,11 @@ class QaTowerDefense {
           <span class="metric">Выбрано: <strong id="td-selected">Manual QA</strong></span>
         </div>
 
+        <div class="progress-row">
+          <div class="progress-label"><span>${this.ability.name} (Shift)</span><strong id="td-power-label">Готово</strong></div>
+          <div class="progress"><span id="td-power-bar" style="width:100%"></span></div>
+        </div>
+
         <div class="canvas-wrap">
           <canvas id="td-canvas" width="${WIDTH}" height="${HEIGHT}"></canvas>
           <div class="overlay-note" id="td-overlay" hidden>Пауза</div>
@@ -147,6 +164,8 @@ class QaTowerDefense {
       score: this.container.querySelector("#td-score"),
       difficulty: this.container.querySelector("#td-difficulty"),
       selected: this.container.querySelector("#td-selected"),
+      powerLabel: this.container.querySelector("#td-power-label"),
+      powerBar: this.container.querySelector("#td-power-bar"),
       towerButtons: this.container.querySelector("#td-tower-buttons")
     };
 
@@ -173,6 +192,9 @@ class QaTowerDefense {
       wavesCleared: 0,
       waveDelay: 1.5,
       selectedTower: "manual",
+      powerCooldown: 0,
+      powerActive: 0,
+      fireSoundCooldown: 0,
       enemiesToSpawn: 0,
       spawnGap: 0,
       spawnTimer: 0,
@@ -228,6 +250,9 @@ class QaTowerDefense {
       this.state.selectedTower = "sdet";
       this.updateHud();
     }
+    if (event.key === "Shift") {
+      this.tryActivatePower();
+    }
   }
 
   onCanvasClick(event) {
@@ -272,6 +297,7 @@ class QaTowerDefense {
       cooldown: Math.random() * 0.2
     });
 
+    this.audio?.play?.("tower-place");
     this.updateHud();
   }
 
@@ -327,6 +353,15 @@ class QaTowerDefense {
 
   update(dt) {
     this.state.elapsed += dt;
+    if (this.state.powerCooldown > 0) {
+      this.state.powerCooldown = Math.max(0, this.state.powerCooldown - dt);
+    }
+    if (this.state.powerActive > 0) {
+      this.state.powerActive = Math.max(0, this.state.powerActive - dt);
+    }
+    if (this.state.fireSoundCooldown > 0) {
+      this.state.fireSoundCooldown = Math.max(0, this.state.fireSoundCooldown - dt);
+    }
 
     if (this.state.waveDelay > 0) {
       this.state.waveDelay -= dt;
@@ -358,6 +393,7 @@ class QaTowerDefense {
       this.state.wave += 1;
       this.state.waveDelay = 2;
       this.configureWave(this.state.wave);
+      this.audio?.play?.("tower-wave");
     }
   }
 
@@ -367,13 +403,16 @@ class QaTowerDefense {
       enemy.x += enemy.speed * dt;
 
       if (enemy.x - enemy.radius > WIDTH - 20) {
-        this.state.baseHealth = clamp(this.state.baseHealth - enemy.damage, 0, 100);
+        this.state.baseHealth = clamp(this.state.baseHealth - enemy.damage, 0, this.difficulty.baseHealth);
         this.enemies.splice(i, 1);
         continue;
       }
 
       if (enemy.hp <= 0) {
-        this.state.money += enemy.bounty;
+        const bounty = this.state.powerActive > 0
+          ? Math.round(enemy.bounty * this.ability.bountyMultiplier)
+          : enemy.bounty;
+        this.state.money += bounty;
         this.state.score += 30 + enemy.bounty * 3;
         this.state.kills += 1;
         this.enemies.splice(i, 1);
@@ -393,18 +432,26 @@ class QaTowerDefense {
         return;
       }
 
-      tower.cooldown = tower.type.fireRate;
+      const haste = this.state.powerActive > 0 ? this.ability.fireRateMultiplier : 1;
+      tower.cooldown = tower.type.fireRate / haste;
 
       const angle = Math.atan2(target.y - tower.y, target.x - tower.x);
+      const damage = this.state.powerActive > 0
+        ? tower.type.damage * this.ability.damageMultiplier
+        : tower.type.damage;
       this.projectiles.push({
         x: tower.x,
         y: tower.y,
         vx: Math.cos(angle) * tower.type.projectileSpeed,
         vy: Math.sin(angle) * tower.type.projectileSpeed,
-        damage: tower.type.damage,
+        damage,
         splashRadius: tower.type.splashRadius || 0,
         color: tower.type.color
       });
+      if (this.state.fireSoundCooldown <= 0) {
+        this.audio?.play?.("tower-fire");
+        this.state.fireSoundCooldown = 0.05;
+      }
     });
   }
 
@@ -414,7 +461,8 @@ class QaTowerDefense {
 
     this.enemies.forEach((enemy) => {
       const dist = distance(tower.x, tower.y, enemy.x, enemy.y);
-      if (dist > tower.type.range) {
+      const rangeBonus = this.state.powerActive > 0 ? this.ability.rangeBonus : 0;
+      if (dist > tower.type.range + rangeBonus) {
         return;
       }
       if (enemy.x > bestProgress) {
@@ -452,6 +500,7 @@ class QaTowerDefense {
             enemy.hp -= projectile.damage;
           }
           hit = true;
+          this.audio?.play?.("tower-hit");
           break;
         }
       }
@@ -469,6 +518,34 @@ class QaTowerDefense {
     this.dom.score.textContent = String(Math.round(this.state.score));
     this.dom.difficulty.textContent = this.difficulty.title;
     this.dom.selected.textContent = TOWER_TYPES[this.state.selectedTower].title;
+
+    if (this.state.powerActive > 0) {
+      this.dom.powerLabel.textContent = `Активно ${this.state.powerActive.toFixed(1)}с`;
+      this.dom.powerBar.style.width = "100%";
+      return;
+    }
+
+    if (this.state.powerCooldown <= 0) {
+      this.dom.powerLabel.textContent = "Готово";
+      this.dom.powerBar.style.width = "100%";
+      return;
+    }
+
+    const progress = clamp(1 - this.state.powerCooldown / this.ability.cooldown, 0, 1);
+    this.dom.powerLabel.textContent = `${this.state.powerCooldown.toFixed(1)}с`;
+    this.dom.powerBar.style.width = `${Math.round(progress * 100)}%`;
+  }
+
+  tryActivatePower() {
+    if (!this.state.running || this.state.paused || this.state.powerCooldown > 0) {
+      return;
+    }
+    this.state.powerActive = this.ability.duration;
+    this.state.powerCooldown = this.ability.cooldown;
+    this.state.money += this.ability.instantCredits;
+    this.state.baseHealth = clamp(this.state.baseHealth + this.ability.baseHeal, 0, this.difficulty.baseHealth);
+    this.audio?.play?.("ability");
+    this.updateHud();
   }
 
   draw() {

@@ -14,7 +14,20 @@ class PixelQaFighter {
   constructor(container, globalState, callbacks) {
     this.container = container;
     this.hero = globalState.hero;
+    this.audio = globalState.audio || null;
     this.callbacks = callbacks;
+    this.ability = this.hero?.abilities?.fighter || {
+      name: this.hero.superpower,
+      cooldown: 14,
+      duration: 3.6,
+      moveMultiplier: 1.08,
+      jumpMultiplier: 1.05,
+      bulletDamageBonus: 4,
+      auraDps: 22,
+      auraRange: 150,
+      damageReduction: 0.18,
+      instantHeal: 5
+    };
 
     this.state = null;
     this.controls = {
@@ -58,7 +71,7 @@ class PixelQaFighter {
         </header>
 
         <div class="progress-row">
-          <div class="progress-label"><span>Перезарядка суперсилы (Shift)</span><strong id="fighter-power-label">Готово</strong></div>
+          <div class="progress-label"><span>${this.ability.name} (Shift)</span><strong id="fighter-power-label">Готово</strong></div>
           <div class="progress"><span id="fighter-power-bar" style="width:100%"></span></div>
         </div>
 
@@ -104,7 +117,7 @@ class PixelQaFighter {
       spawnTimer: 0,
       shootCooldown: 0,
       powerCooldown: 0,
-      powerPulse: 0,
+      powerActive: 0,
       noDamageCurrent: 0,
       noDamageBest: 0,
       lastTime: 0,
@@ -185,19 +198,20 @@ class PixelQaFighter {
     this.state.noDamageBest = Math.max(this.state.noDamageBest, this.state.noDamageCurrent);
 
     if (this.state.shootCooldown > 0) {
-      this.state.shootCooldown -= dt;
+      this.state.shootCooldown = Math.max(0, this.state.shootCooldown - dt);
     }
     if (this.state.powerCooldown > 0) {
-      this.state.powerCooldown -= dt;
+      this.state.powerCooldown = Math.max(0, this.state.powerCooldown - dt);
     }
-    if (this.state.powerPulse > 0) {
-      this.state.powerPulse -= dt;
+    if (this.state.powerActive > 0) {
+      this.state.powerActive = Math.max(0, this.state.powerActive - dt);
     }
     if (player.damageCooldown > 0) {
       player.damageCooldown -= dt;
     }
 
-    const moveSpeed = 240;
+    const activePower = this.state.powerActive > 0;
+    const moveSpeed = 240 * (activePower ? this.ability.moveMultiplier : 1);
     if (this.controls.left && !this.controls.right) {
       player.vx = -moveSpeed;
     } else if (this.controls.right && !this.controls.left) {
@@ -207,7 +221,7 @@ class PixelQaFighter {
     }
 
     if (this.controls.jump && player.onGround) {
-      player.vy = -390;
+      player.vy = -390 * (activePower ? this.ability.jumpMultiplier : 1);
       player.onGround = false;
     }
 
@@ -244,8 +258,9 @@ class PixelQaFighter {
       y: player.y + player.h * 0.45,
       r: 4,
       speed: 470,
-      damage: this.state.powerPulse > 0 ? 14 : 10
+      damage: this.state.powerActive > 0 ? 10 + this.ability.bulletDamageBonus : 10
     });
+    this.audio?.play?.("fighter-shot");
   }
 
   spawnEnemies(dt) {
@@ -279,8 +294,8 @@ class PixelQaFighter {
       enemy.wobble += dt * 4;
       enemy.y = GROUND_Y - enemy.size + Math.sin(enemy.wobble) * 2;
 
-      if (this.state.powerPulse > 0 && Math.abs((enemy.x + enemy.size / 2) - (player.x + player.w / 2)) < 150) {
-        enemy.hp -= 24 * dt;
+      if (this.state.powerActive > 0 && Math.abs((enemy.x + enemy.size / 2) - (player.x + player.w / 2)) < this.ability.auraRange) {
+        enemy.hp -= this.ability.auraDps * dt;
       }
 
       if (enemy.x + enemy.size < 0) {
@@ -290,9 +305,11 @@ class PixelQaFighter {
 
       if (rectIntersect(player.x, player.y, player.w, player.h, enemy.x, enemy.y, enemy.size, enemy.size)) {
         if (player.damageCooldown <= 0) {
-          player.hp = clamp(player.hp - enemy.damage, 0, 100);
+          const reduction = this.state.powerActive > 0 ? this.ability.damageReduction : 0;
+          player.hp = clamp(player.hp - enemy.damage * (1 - reduction), 0, 100);
           player.damageCooldown = 0.9;
           this.state.noDamageCurrent = 0;
+          this.audio?.play?.("fighter-hit");
         }
 
         enemy.hp -= 25 * dt;
@@ -342,8 +359,10 @@ class PixelQaFighter {
       return;
     }
 
-    this.state.powerPulse = 3.6;
-    this.state.powerCooldown = 14;
+    this.state.powerActive = this.ability.duration;
+    this.state.powerCooldown = this.ability.cooldown;
+    this.state.player.hp = clamp(this.state.player.hp + this.ability.instantHeal, 0, 100);
+    this.audio?.play?.("ability");
   }
 
   updateHud() {
@@ -352,13 +371,19 @@ class PixelQaFighter {
     this.dom.time.textContent = String(Math.floor(this.state.elapsed));
     this.dom.kills.textContent = String(this.state.kills);
 
+    if (this.state.powerActive > 0) {
+      this.dom.powerLabel.textContent = `Активно ${this.state.powerActive.toFixed(1)}с`;
+      this.dom.powerBar.style.width = "100%";
+      return;
+    }
+
     if (this.state.powerCooldown <= 0) {
       this.dom.powerLabel.textContent = "Готово";
       this.dom.powerBar.style.width = "100%";
       return;
     }
 
-    const progress = clamp(1 - this.state.powerCooldown / 14, 0, 1);
+    const progress = clamp(1 - this.state.powerCooldown / this.ability.cooldown, 0, 1);
     this.dom.powerLabel.textContent = `${this.state.powerCooldown.toFixed(1)}с`;
     this.dom.powerBar.style.width = `${Math.round(progress * 100)}%`;
   }
@@ -404,23 +429,29 @@ class PixelQaFighter {
       ctx.fillRect(enemy.x, enemy.y - 8, enemy.size * hpRatio, 4);
     });
 
+    const avatarSize = Math.min(player.w, player.h);
+    const avatarX = player.x + (player.w - avatarSize) / 2;
+    const avatarY = player.y + (player.h - avatarSize) / 2;
+
     if (this.heroImage.complete) {
       ctx.save();
       ctx.beginPath();
-      ctx.arc(player.x + player.w / 2, player.y + player.h / 2, player.w / 2, 0, Math.PI * 2);
+      ctx.arc(avatarX + avatarSize / 2, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
       ctx.clip();
-      ctx.drawImage(this.heroImage, player.x, player.y, player.w, player.h);
+      ctx.drawImage(this.heroImage, avatarX, avatarY, avatarSize, avatarSize);
       ctx.restore();
     } else {
       ctx.fillStyle = "#47e9ff";
-      ctx.fillRect(player.x, player.y, player.w, player.h);
+      ctx.beginPath();
+      ctx.arc(avatarX + avatarSize / 2, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+      ctx.fill();
     }
 
-    if (this.state.powerPulse > 0) {
+    if (this.state.powerActive > 0) {
       ctx.strokeStyle = "rgba(87, 245, 163, 0.7)";
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.arc(player.x + player.w / 2, player.y + player.h / 2, 150, 0, Math.PI * 2);
+      ctx.arc(player.x + player.w / 2, player.y + player.h / 2, this.ability.auraRange, 0, Math.PI * 2);
       ctx.stroke();
     }
   }
