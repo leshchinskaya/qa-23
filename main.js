@@ -3,53 +3,54 @@ import * as pixelQaFighter from "./games/pixel-qa-fighter.js";
 import * as qaTowerDefense from "./games/qa-tower-defense.js";
 
 const STORAGE_KEY = "qaGamePortalProfileV2";
+const THEME_STORAGE_KEY = "qaGamePortalTheme";
 
 const HEROES = [
   {
     id: "pechkin",
     name: "Печкин Дмитрий",
-    description: "Системно разбирает криты и находит корневую причину за минуты.",
-    superpower: "Точный дебаг",
+    description: "Быстро берёт в работу любую задачу и превращает её в ощутимый рост качества.",
+    superpower: "Архитектор качества",
     image: "assets/pechkin.jpg",
     powerEffects: { stability: 14, speed: 3, morale: 2 }
   },
   {
     id: "vinogradov",
     name: "Виноградов Сергей",
-    description: "Возвращает зелёный статус пайплайна в самый тяжёлый момент.",
-    superpower: "Шёпот CI",
+    description: "Успевает закрывать критичные задачи за короткое время без потери качества.",
+    superpower: "Турбо-ритм",
     image: "assets/vinogradov.jpg",
     powerEffects: { stability: 5, speed: 15, morale: 1 }
   },
   {
     id: "derkachev",
     name: "Деркачев Матвей",
-    description: "Уничтожает флейки и чистит тестовые отчёты от шума.",
-    superpower: "Антифлейк",
+    description: "Мастер переключений: быстро меняет контекст и стабильно держит темп команды.",
+    superpower: "Мультиконтекст",
     image: "assets/derkachev.jpg",
     powerEffects: { stability: 10, speed: 9, morale: 1 }
   },
   {
     id: "ryazantsev",
     name: "Рязанцев Александр",
-    description: "Фиксирует границы требований и сохраняет ритм команды.",
-    superpower: "Щит требований",
+    description: "Надёжный девайс-холдер: держит парк устройств в боевой готовности для тестов.",
+    superpower: "Арсенал девайсов",
     image: "assets/ryazantsev.jpg",
     powerEffects: { stability: 6, speed: 2, morale: 12 }
   },
   {
     id: "yanovskiy",
     name: "Яновский Данил",
-    description: "Ускоряет доставку хотфикса, когда счёт идёт на минуты.",
-    superpower: "Спринт фикса",
+    description: "Сильный в нагрузочном и продуктовом тестировании, видит риски ещё до релиза.",
+    superpower: "Нагрузочный радар",
     image: "assets/yanovskiy.jpg",
     powerEffects: { stability: 2, speed: 16, morale: -1 }
   },
   {
     id: "pereguda",
     name: "Перегуда Роман",
-    description: "Поднимает боевой дух и стабилизирует командную работу.",
-    superpower: "Командный буст",
+    description: "Специалист по iOS-автотестам и мастер отладки нестабильных CI-пайплайнов.",
+    superpower: "CI-реаниматор iOS",
     image: "assets/pereguda.jpg",
     powerEffects: { stability: 3, speed: 4, morale: 16 }
   },
@@ -64,20 +65,26 @@ const HEROES = [
   {
     id: "voronin",
     name: "Воронин Владислав",
-    description: "Защищает CI от каскадных падений и ломких проверок.",
-    superpower: "Купол CI",
+    description: "Автоматизатор и разработчик, который доводит QA-инструменты до продакшен-уровня.",
+    superpower: "Кодовый автоматизатор",
     image: "assets/voronin.jpg",
     powerEffects: { stability: 8, speed: 12, morale: 1 }
   },
   {
     id: "repin",
     name: "Репин Александр",
-    description: "Охлаждает релизный хаос и выравнивает ключевые метрики.",
-    superpower: "Стоп-кадр дедлайна",
+    description: "Мегаэффективно удерживает SLA и вывозит критичные сроки в самые горячие релизы.",
+    superpower: "Щит SLA",
     image: "assets/repin.jpg",
     powerEffects: { stability: 6, speed: 6, morale: 6 }
   }
 ];
+
+const TOWER_DIFFICULTIES = {
+  easy: { id: "easy", title: "Лёгкая", caption: "Больше запаса HP и кредитов, 6 волн." },
+  normal: { id: "normal", title: "Нормальная", caption: "Базовый режим: 8 волн и стандартный баланс." },
+  hard: { id: "hard", title: "Сложная", caption: "Жёсткий натиск врагов, 10 волн и повышенные награды." }
+};
 
 const GAMES = {
   "qa-hero": {
@@ -99,7 +106,7 @@ const GAMES = {
     title: "QA Tower Defense",
     shortDescription: "Оборона " +
       "прода" +
-      ": размещай башни и переживи 8 волн атакующих дефектов.",
+      ": выбери сложность, размещай башни и переживи волны атакующих дефектов.",
     controls: "Клик — поставить башню, 1/2/3 — выбор типа, P — пауза",
     module: qaTowerDefense
   }
@@ -220,6 +227,8 @@ class StateManager {
 
 const appState = {
   profile: null,
+  theme: "dark",
+  pendingTowerDifficulty: "normal",
   currentView: "loading",
   pendingGameId: null,
   activeGameId: null,
@@ -247,6 +256,7 @@ const dom = {
   recentRuns: document.getElementById("recent-runs"),
   topbarCoins: document.getElementById("topbar-coins"),
   topbarScore: document.getElementById("topbar-score"),
+  themeToggle: document.getElementById("theme-toggle"),
   gameIntro: document.getElementById("game-intro"),
   gameToolbar: document.getElementById("game-toolbar"),
   activeGameTitle: document.getElementById("active-game-title"),
@@ -263,6 +273,41 @@ const dom = {
 };
 
 const stateManager = new StateManager(STORAGE_KEY);
+
+function getInitialTheme() {
+  const saved = localStorage.getItem(THEME_STORAGE_KEY);
+  if (saved === "light" || saved === "dark") {
+    return saved;
+  }
+  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+
+function applyTheme(theme, persist = false) {
+  const nextTheme = theme === "light" ? "light" : "dark";
+  appState.theme = nextTheme;
+  document.documentElement.setAttribute("data-theme", nextTheme);
+
+  if (persist) {
+    localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+  }
+
+  if (!dom.themeToggle) {
+    return;
+  }
+
+  const isLight = nextTheme === "light";
+  dom.themeToggle.textContent = isLight ? "☀️" : "☁️";
+  dom.themeToggle.dataset.themeIcon = nextTheme;
+  dom.themeToggle.setAttribute("title", isLight ? "Светлая тема" : "Тёмная тема");
+  dom.themeToggle.setAttribute(
+    "aria-label",
+    isLight ? "Переключить на тёмную тему" : "Переключить на светлую тему"
+  );
+}
+
+function toggleTheme() {
+  applyTheme(appState.theme === "light" ? "dark" : "light", true);
+}
 
 function preloadImages(paths) {
   return Promise.all(
@@ -498,12 +543,37 @@ function openGameIntro(gameId) {
 
   appState.pendingGameId = gameId;
   const game = GAMES[gameId];
+  const isTowerDefense = gameId === "qa-tower-defense";
+  let selectedDifficultyId = appState.pendingTowerDifficulty in TOWER_DIFFICULTIES
+    ? appState.pendingTowerDifficulty
+    : "normal";
+  const difficultyMarkup = isTowerDefense
+    ? `
+      <div class="difficulty-picker">
+        <p><strong>Сложность:</strong> <span id="td-intro-difficulty">${TOWER_DIFFICULTIES[selectedDifficultyId].title}</span></p>
+        <div class="difficulty-options">
+          ${Object.values(TOWER_DIFFICULTIES).map((difficulty) => `
+            <button
+              type="button"
+              class="btn btn-secondary difficulty-option ${difficulty.id === selectedDifficultyId ? "active" : ""}"
+              data-difficulty="${difficulty.id}"
+            >
+              ${difficulty.title}
+            </button>
+          `).join("")}
+        </div>
+        <p class="difficulty-caption" id="td-intro-caption">${TOWER_DIFFICULTIES[selectedDifficultyId].caption}</p>
+      </div>
+    `
+    : "";
+
   dom.gameContainer.innerHTML = "";
   dom.gameToolbar.classList.remove("active");
   dom.gameIntro.innerHTML = `
     <h2>${game.title}</h2>
     <p>${game.shortDescription}</p>
     <p><strong>Управление:</strong> ${game.controls}</p>
+    ${difficultyMarkup}
     <div class="intro-actions">
       <button id="btn-game-start" class="btn" type="button">Старт</button>
       <button id="btn-game-back" class="btn btn-secondary" type="button">Назад в лобби</button>
@@ -513,7 +583,27 @@ function openGameIntro(gameId) {
   dom.activeGameTitle.textContent = game.title;
   dom.activeGameControls.textContent = game.controls;
 
-  dom.gameIntro.querySelector("#btn-game-start").addEventListener("click", () => startGame(gameId));
+  if (isTowerDefense) {
+    const difficultyLabel = dom.gameIntro.querySelector("#td-intro-difficulty");
+    const difficultyCaption = dom.gameIntro.querySelector("#td-intro-caption");
+    dom.gameIntro.querySelectorAll("[data-difficulty]").forEach((button) => {
+      button.addEventListener("click", () => {
+        selectedDifficultyId = button.dataset.difficulty in TOWER_DIFFICULTIES
+          ? button.dataset.difficulty
+          : "normal";
+        appState.pendingTowerDifficulty = selectedDifficultyId;
+        difficultyLabel.textContent = TOWER_DIFFICULTIES[selectedDifficultyId].title;
+        difficultyCaption.textContent = TOWER_DIFFICULTIES[selectedDifficultyId].caption;
+        dom.gameIntro.querySelectorAll("[data-difficulty]").forEach((option) => {
+          option.classList.toggle("active", option.dataset.difficulty === selectedDifficultyId);
+        });
+      });
+    });
+  }
+
+  dom.gameIntro.querySelector("#btn-game-start").addEventListener("click", () => {
+    startGame(gameId, { towerDifficulty: selectedDifficultyId });
+  });
   dom.gameIntro.querySelector("#btn-game-back").addEventListener("click", () => {
     appState.pendingGameId = null;
     setView("lobby");
@@ -588,9 +678,12 @@ function handleGameResult(baseResult) {
   showResults(result);
 }
 
-function startGame(gameId) {
+function startGame(gameId, options = {}) {
   const game = GAMES[gameId];
   const hero = getHero(appState.profile.selectedHeroId);
+  const towerDifficulty = options.towerDifficulty in TOWER_DIFFICULTIES
+    ? options.towerDifficulty
+    : appState.pendingTowerDifficulty;
   if (!game || !hero) {
     if (!hero) {
       setView("heroes");
@@ -601,6 +694,7 @@ function startGame(gameId) {
   teardownActiveGame();
   appState.activeGameId = gameId;
   appState.pendingGameId = null;
+  appState.pendingTowerDifficulty = towerDifficulty in TOWER_DIFFICULTIES ? towerDifficulty : "normal";
   dom.gameIntro.innerHTML = "";
   dom.gameToolbar.classList.add("active");
   dom.gameContainer.innerHTML = "";
@@ -635,7 +729,8 @@ function startGame(gameId) {
     {
       hero,
       selectedHeroId: appState.profile.selectedHeroId,
-      profile: appState.profile
+      profile: appState.profile,
+      towerDifficulty: appState.pendingTowerDifficulty
     },
     callbacks
   );
@@ -661,6 +756,10 @@ async function exitGameToLobby() {
 }
 
 function attachEvents() {
+  dom.themeToggle?.addEventListener("click", () => {
+    toggleTheme();
+  });
+
   dom.navButtons.forEach((button) => {
     button.addEventListener("click", async () => {
       if (!appState.loadingDone) {
@@ -731,6 +830,7 @@ function attachEvents() {
 }
 
 async function bootstrap() {
+  applyTheme(getInitialTheme());
   attachEvents();
   appState.profile = stateManager.load();
 

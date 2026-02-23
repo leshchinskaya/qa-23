@@ -36,10 +36,59 @@ const TOWER_TYPES = {
   }
 };
 
+const DIFFICULTY_PRESETS = {
+  easy: {
+    id: "easy",
+    title: "Лёгкая",
+    maxWaves: 6,
+    baseHealth: 120,
+    startMoney: 115,
+    enemyCountMultiplier: 0.85,
+    enemyHpMultiplier: 0.84,
+    enemySpeedMultiplier: 0.92,
+    enemyDamageMultiplier: 0.82,
+    spawnGapMultiplier: 1.14,
+    bountyMultiplier: 0.94,
+    scoreMultiplier: 0.9,
+    coinMultiplier: 0.9
+  },
+  normal: {
+    id: "normal",
+    title: "Нормальная",
+    maxWaves: 8,
+    baseHealth: 100,
+    startMoney: 90,
+    enemyCountMultiplier: 1,
+    enemyHpMultiplier: 1,
+    enemySpeedMultiplier: 1,
+    enemyDamageMultiplier: 1,
+    spawnGapMultiplier: 1,
+    bountyMultiplier: 1,
+    scoreMultiplier: 1,
+    coinMultiplier: 1
+  },
+  hard: {
+    id: "hard",
+    title: "Сложная",
+    maxWaves: 10,
+    baseHealth: 85,
+    startMoney: 78,
+    enemyCountMultiplier: 1.2,
+    enemyHpMultiplier: 1.22,
+    enemySpeedMultiplier: 1.14,
+    enemyDamageMultiplier: 1.25,
+    spawnGapMultiplier: 0.9,
+    bountyMultiplier: 1.15,
+    scoreMultiplier: 1.24,
+    coinMultiplier: 1.22
+  }
+};
+
 class QaTowerDefense {
   constructor(container, globalState, callbacks) {
     this.container = container;
     this.hero = globalState.hero;
+    this.difficulty = getDifficultyPreset(globalState.towerDifficulty);
     this.callbacks = callbacks;
 
     this.gridCells = this.buildGrid();
@@ -67,9 +116,10 @@ class QaTowerDefense {
             </div>
           </div>
           <div class="hud-metrics">
-            <span class="metric">Прод HP: <strong id="td-base">100</strong></span>
-            <span class="metric">Волна: <strong id="td-wave">1</strong>/8</span>
-            <span class="metric">Кредиты: <strong id="td-money">90</strong></span>
+            <span class="metric">Прод HP: <strong id="td-base">${this.difficulty.baseHealth}</strong></span>
+            <span class="metric">Волна: <strong id="td-wave">1</strong>/${this.difficulty.maxWaves}</span>
+            <span class="metric">Кредиты: <strong id="td-money">${this.difficulty.startMoney}</strong></span>
+            <span class="metric">Сложность: <strong id="td-difficulty">${this.difficulty.title}</strong></span>
             <span class="metric">Счёт: <strong id="td-score">0</strong></span>
           </div>
         </header>
@@ -95,6 +145,7 @@ class QaTowerDefense {
       wave: this.container.querySelector("#td-wave"),
       money: this.container.querySelector("#td-money"),
       score: this.container.querySelector("#td-score"),
+      difficulty: this.container.querySelector("#td-difficulty"),
       selected: this.container.querySelector("#td-selected"),
       towerButtons: this.container.querySelector("#td-tower-buttons")
     };
@@ -113,8 +164,8 @@ class QaTowerDefense {
     this.state = {
       running: true,
       paused: false,
-      baseHealth: 100,
-      money: 90,
+      baseHealth: this.difficulty.baseHealth,
+      money: this.difficulty.startMoney,
       score: 0,
       kills: 0,
       elapsed: 0,
@@ -241,20 +292,21 @@ class QaTowerDefense {
   }
 
   configureWave(waveNumber) {
-    const count = 6 + waveNumber * 3;
-    const hp = 26 + waveNumber * 16;
-    const speed = 35 + waveNumber * 8;
-    const damage = 4 + Math.floor(waveNumber / 2);
+    const count = Math.max(4, Math.round((6 + waveNumber * 3) * this.difficulty.enemyCountMultiplier));
+    const hp = Math.round((26 + waveNumber * 16) * this.difficulty.enemyHpMultiplier);
+    const speed = Math.round((35 + waveNumber * 8) * this.difficulty.enemySpeedMultiplier);
+    const damage = Math.max(1, Math.round((4 + Math.floor(waveNumber / 2)) * this.difficulty.enemyDamageMultiplier));
+    const bounty = Math.max(3, Math.round((8 + waveNumber * 2) * this.difficulty.bountyMultiplier));
 
     this.state.enemiesToSpawn = count;
-    this.state.spawnGap = Math.max(0.42, 1.2 - waveNumber * 0.07);
+    this.state.spawnGap = Math.max(0.34, (1.2 - waveNumber * 0.07) * this.difficulty.spawnGapMultiplier);
     this.state.spawnTimer = 0.3;
     this.state.enemyTemplate = {
       hp,
       maxHp: hp,
       speed,
       damage,
-      bounty: 8 + waveNumber * 2,
+      bounty,
       radius: 16 + Math.floor(waveNumber / 2)
     };
   }
@@ -299,8 +351,8 @@ class QaTowerDefense {
 
     if (this.state.enemiesToSpawn === 0 && this.enemies.length === 0 && this.projectiles.length === 0 && this.state.waveDelay <= 0) {
       this.state.wavesCleared = Math.max(this.state.wavesCleared, this.state.wave);
-      if (this.state.wave >= 8) {
-        this.finish(true, "Все 8 волн отражены. Прод защищён.");
+      if (this.state.wave >= this.difficulty.maxWaves) {
+        this.finish(true, `Все ${this.difficulty.maxWaves} волн отражены. Прод защищён.`);
         return;
       }
       this.state.wave += 1;
@@ -415,6 +467,7 @@ class QaTowerDefense {
     this.dom.wave.textContent = `${this.state.wave}`;
     this.dom.money.textContent = String(Math.round(this.state.money));
     this.dom.score.textContent = String(Math.round(this.state.score));
+    this.dom.difficulty.textContent = this.difficulty.title;
     this.dom.selected.textContent = TOWER_TYPES[this.state.selectedTower].title;
   }
 
@@ -506,10 +559,12 @@ class QaTowerDefense {
     this.state.running = false;
     const playTime = Math.floor(this.state.elapsed);
     const waveReached = Math.max(this.state.wavesCleared, this.state.wave);
-    const score = Math.round(this.state.score + waveReached * 220 + this.state.baseHealth * 3);
-    const coins = win
-      ? Math.round(clamp(45 + waveReached * 6 + this.state.baseHealth * 0.15, 45, 130))
-      : Math.round(clamp(15 + waveReached * 4, 15, 70));
+    const rawScore = this.state.score + waveReached * 220 + this.state.baseHealth * 3;
+    const score = Math.round(rawScore * this.difficulty.scoreMultiplier);
+    const baseCoins = win
+      ? clamp(45 + waveReached * 6 + this.state.baseHealth * 0.15, 45, 130)
+      : clamp(15 + waveReached * 4, 15, 70);
+    const coins = Math.round(clamp(baseCoins * this.difficulty.coinMultiplier, 12, 180));
 
     const payload = {
       message,
@@ -578,6 +633,10 @@ function distance(ax, ay, bx, by) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function getDifficultyPreset(difficultyId) {
+  return DIFFICULTY_PRESETS[difficultyId] || DIFFICULTY_PRESETS.normal;
 }
 
 export function init(containerEl, globalState, callbacks) {
